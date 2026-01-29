@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 
-const API_URL = "http://127.0.0.1:8000/analyze";
+const API_URL = "https://wodai.onrender.com/analyze";
 // in produzione: https://TUO-BACKEND.onrender.com/analyze
 
 function clsx(...a) {
