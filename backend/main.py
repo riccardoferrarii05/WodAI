@@ -1,21 +1,23 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
-from fastapi.middleware.cors import CORSMiddleware
 import os
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from openai import OpenAI
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 app = FastAPI()
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
+# CORS: metti qui TUTTI gli origin permessi (senza slash finale)
+ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
-    "https://wod-ai.vercel.app"
+    "https://wod-ai.vercel.app",
 ]
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -23,16 +25,16 @@ app.add_middleware(
 
 class Request(BaseModel):
     wod: str
-    level: str  # Beginner | Intermedio | Elite
-    mode: str   # Coach | Tecnico
+    level: str
+    mode: str
 
 def build_system_prompt(level: str, mode: str) -> str:
     base = (
         "Sei un coach CrossFit esperto.\n"
         "Regole NON negoziabili:\n"
-        "- Rispondi SOLO in testo pulito (NO markdown, NO elenchi con '*', NO asterischi '*').\n"
+        "- Rispondi SOLO testo pulito (NO markdown, NO elenchi con '*', NO asterischi '*').\n"
         "- Usa intestazioni con emoji e vai a capo.\n"
-        "- Struttura obbligatoria (in questo ordine):\n"
+        "Struttura obbligatoria (in questo ordine):\n"
         "🔥 Stimolo:\n"
         "⏱️ Time domain stimato:\n"
         "💪 Muscoli & pattern:\n"
@@ -42,69 +44,66 @@ def build_system_prompt(level: str, mode: str) -> str:
         "🎯 Cue tecnici (2-3):\n"
     )
 
-    level = (level or "").strip().lower()
-    mode = (mode or "").strip().lower()
+    level_l = (level or "").strip().lower()
+    mode_l = (mode or "").strip().lower()
 
-    if level == "beginner":
+    if level_l == "beginner":
         level_rules = (
             "\nLIVELLO ATLETA: Beginner\n"
             "- Linguaggio semplicissimo.\n"
             "- Priorità: sicurezza + tecnica.\n"
-            "- Scaling MOLTO accessibile (varianti facili, carichi leggeri).\n"
-            "- Pacing conservativo, evita intensità massima.\n"
-            "- Evita gergo avanzato.\n"
+            "- Scaling MOLTO accessibile.\n"
+            "- Pacing conservativo.\n"
         )
-    elif level == "elite":
+    elif level_l == "elite":
         level_rules = (
             "\nLIVELLO ATLETA: Elite\n"
             "- Linguaggio avanzato.\n"
-            "- Pacing con dettagli: split reps, cycle time, transizioni.\n"
-            "- Scaling minimo: preferisci strategie RX; se proponi scaling, fallo per gestione fatica.\n"
-            "- Cue tecnici precisi e orientati all’efficienza.\n"
+            "- Pacing dettagliato con split e transizioni.\n"
+            "- Scaling minimo: preferisci strategie RX.\n"
         )
     else:
         level_rules = (
             "\nLIVELLO ATLETA: Intermedio\n"
-            "- Linguaggio da box: chiaro ma dettagliato.\n"
-            "- Pacing con break plan (set consigliati, respirazione, transizioni).\n"
-            "- Scaling realistico su skill/carichi.\n"
+            "- Linguaggio da box, chiaro ma dettagliato.\n"
+            "- Break plan realistico.\n"
+            "- Scaling su skill/carichi.\n"
         )
 
-    if mode == "tecnico":
+    if mode_l == "tecnico":
         mode_rules = (
             "\nMODALITÀ: Tecnico\n"
             "- Tono neutro e tecnico.\n"
-            "- Aggiungi 1-2 elementi misurabili (es: set 5+5, rest 10-15s, target unbroken).\n"
-            "- Inserisci riferimento al tipo di stimolo/energia (senza esagerare).\n"
-            "- Emoji: max 1 per sezione.\n"
+            "- Inserisci almeno 2 numeri (set/rest/target).\n"
+            "- Emoji max 1 per sezione.\n"
         )
     else:
         mode_rules = (
             "\nMODALITÀ: Coach\n"
             "- Tono motivante e diretto.\n"
-            "- Emoji discrete e utili (🔥 ⏱️ 💪 ⚠️ 🧠).\n"
-            "- Consigli pratici concreti.\n"
+            "- Emoji utili (🔥 ⏱️ 💪 ⚠️ 🧠).\n"
         )
 
-    # Mini “ancora” per rendere le risposte chiaramente diverse
     anchors = (
         "\nANCORA DIFFERENZE (obbligatorio):\n"
-        "- Se Beginner: includi una frase tipo 'Obiettivo: muoversi bene e continuo' + scaling molto facile.\n"
-        "- Se Elite: includi una frase tipo 'Target: mantenere cycle time' + split reps dettagliato.\n"
-        "- Se Tecnico: inserisci almeno 2 numeri (set/rest/target).\n"
-        "- Se Coach: inserisci 1 frase motivazionale breve.\n"
+        "- Beginner: includi 'Obiettivo: muoversi bene e continuo'.\n"
+        "- Elite: includi 'Target: mantenere cycle time' + split reps.\n"
+        "- Tecnico: almeno 2 numeri.\n"
+        "- Coach: 1 frase motivazionale breve.\n"
     )
 
     return base + level_rules + mode_rules + anchors
 
+@app.get("/health")
+def health():
+    return {"ok": True}
+
 @app.post("/analyze")
 def analyze(req: Request):
-    system_prompt = build_system_prompt(req.level, req.mode)
-
     completion = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": build_system_prompt(req.level, req.mode)},
             {"role": "user", "content": f"WOD:\n{req.wod}"},
         ],
         temperature=0.35,
