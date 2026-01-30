@@ -8,7 +8,6 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 app = FastAPI()
 
-# CORS: metti qui TUTTI gli origin permessi (senza slash finale)
 ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
@@ -25,21 +24,27 @@ app.add_middleware(
 
 class Request(BaseModel):
     wod: str
-    level: str
-    mode: str
+    level: str  # Beginner | Intermedio | Elite
+    mode: str   # Coach | Tecnico
 
 def build_system_prompt(level: str, mode: str) -> str:
-    base = (
+    base_rules = (
         "Sei un coach CrossFit esperto.\n"
         "Regole NON negoziabili:\n"
         "- Rispondi SOLO testo pulito (NO markdown, NO elenchi con '*', NO asterischi '*').\n"
         "- Usa intestazioni con emoji e vai a capo.\n"
+        "- Sii concreto: numeri, set, rest, tempi, target.\n"
+        "- Se il WOD è un AMRAP, DEVI dare una stima realistica dei giri/reps per il livello scelto.\n"
+        "- Se non sei sicuro, fai una stima con range + assunzioni esplicite (breve).\n"
+        "\n"
         "Struttura obbligatoria (in questo ordine):\n"
         "🔥 Stimolo:\n"
         "⏱️ Time domain stimato:\n"
         "💪 Muscoli & pattern:\n"
         "⚠️ Criticità:\n"
         "🧠 Pacing (con split/strategie):\n"
+        "🔢 Stima score (se AMRAP: giri + reps; se For Time: tempo stimato; se EMOM: compliance %):\n"
+        "🔥 Riscaldamento specifico (8-12 min, step-by-step):\n"
         "🔁 Scaling (Beginner / Intermedio / Elite):\n"
         "🎯 Cue tecnici (2-3):\n"
     )
@@ -54,6 +59,7 @@ def build_system_prompt(level: str, mode: str) -> str:
             "- Priorità: sicurezza + tecnica.\n"
             "- Scaling MOLTO accessibile.\n"
             "- Pacing conservativo.\n"
+            "- Stima AMRAP: conservativa e realistica.\n"
         )
     elif level_l == "elite":
         level_rules = (
@@ -61,6 +67,7 @@ def build_system_prompt(level: str, mode: str) -> str:
             "- Linguaggio avanzato.\n"
             "- Pacing dettagliato con split e transizioni.\n"
             "- Scaling minimo: preferisci strategie RX.\n"
+            "- Stima AMRAP: aggressiva ma plausibile.\n"
         )
     else:
         level_rules = (
@@ -68,13 +75,15 @@ def build_system_prompt(level: str, mode: str) -> str:
             "- Linguaggio da box, chiaro ma dettagliato.\n"
             "- Break plan realistico.\n"
             "- Scaling su skill/carichi.\n"
+            "- Stima AMRAP: realistica (no numeri fantasy).\n"
         )
 
     if mode_l == "tecnico":
         mode_rules = (
             "\nMODALITÀ: Tecnico\n"
             "- Tono neutro e tecnico.\n"
-            "- Inserisci almeno 2 numeri (set/rest/target).\n"
+            "- Inserisci almeno 3 numeri utili (set/rest/tempo transizioni/target unbroken).\n"
+            "- Spiega in 1 riga il perché della stima score (cycle time).\n"
             "- Emoji max 1 per sezione.\n"
         )
     else:
@@ -82,17 +91,27 @@ def build_system_prompt(level: str, mode: str) -> str:
             "\nMODALITÀ: Coach\n"
             "- Tono motivante e diretto.\n"
             "- Emoji utili (🔥 ⏱️ 💪 ⚠️ 🧠).\n"
+            "- Consigli pratici facili da seguire.\n"
         )
 
-    anchors = (
-        "\nANCORA DIFFERENZE (obbligatorio):\n"
-        "- Beginner: includi 'Obiettivo: muoversi bene e continuo'.\n"
-        "- Elite: includi 'Target: mantenere cycle time' + split reps.\n"
-        "- Tecnico: almeno 2 numeri.\n"
-        "- Coach: 1 frase motivazionale breve.\n"
+    scoring_rules = (
+        "\nREGOLE SCORE (IMPORTANTISSIMO):\n"
+        "- Se trovi 'AMRAP' nel WOD: calcola una stima giri realistica.\n"
+        "  Metodo: stima tempo per round = somma cycle time movimenti + transizioni + micro-break.\n"
+        "  Poi: rounds = durata / tempo_round.\n"
+        "  Restituisci: stima principale + range (es: 4-5 giri) + 1 assunzione.\n"
+        "- Se non è AMRAP: dai un tempo totale stimato o score coerente col formato.\n"
     )
 
-    return base + level_rules + mode_rules + anchors
+    warmup_rules = (
+        "\nREGOLE RISCALDAMENTO:\n"
+        "- Deve essere SPECIFICO per i movimenti del WOD.\n"
+        "- 8-12 minuti.\n"
+        "- Deve includere: attivazione + drill tecnico + build-up leggero verso il carico/skill.\n"
+        "- Deve essere fattibile in un box normale.\n"
+    )
+
+    return base_rules + level_rules + mode_rules + scoring_rules + warmup_rules
 
 @app.get("/health")
 def health():
@@ -107,7 +126,7 @@ def analyze(req: Request):
             {"role": "user", "content": f"WOD:\n{req.wod}"},
         ],
         temperature=0.35,
-        max_tokens=450,
+        max_tokens=700,
     )
 
     text = (completion.choices[0].message.content or "").replace("*", "")
