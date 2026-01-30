@@ -18,13 +18,16 @@ function Segmented({ value, onChange, options }) {
           width: `calc(100% / ${options.length} - 8px)`,
         }}
       />
-      <div className="relative grid" style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}>
+      <div
+        className="relative grid"
+        style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}
+      >
         {options.map((o) => (
           <button
             key={o.value}
             onClick={() => onChange(o.value)}
             className={clsx(
-              "h-10 rounded-xl text-sm transition",
+              "h-10 rounded-xl text-[12px] transition", // ✅ SOLO QUESTO CAMBIA
               value === o.value ? "text-white" : "text-white/60 hover:text-white/80"
             )}
           >
@@ -35,6 +38,7 @@ function Segmented({ value, onChange, options }) {
     </div>
   );
 }
+
 
 export default function Page() {
   const [mounted, setMounted] = useState(false);
